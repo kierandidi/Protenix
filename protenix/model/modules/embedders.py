@@ -24,6 +24,32 @@ from protenix.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+CYCLIC_RELATIVE_POSITION_SUPPORTED = True
+
+
+def shortest_cyclic_offset(
+    residue_offset: torch.Tensor,
+    cyclic_period: torch.Tensor | None,
+    same_chain: torch.Tensor,
+) -> torch.Tensor:
+    """Return signed shortest-path offsets for pairs in cyclic chains.
+
+    A zero period denotes a linear chain. Diametrically opposite residues in
+    even-length cycles retain their linear offset so ties remain deterministic.
+    """
+    if cyclic_period is None:
+        return residue_offset
+    left_period = cyclic_period[..., :, None]
+    right_period = cyclic_period[..., None, :]
+    cyclic_pair = same_chain.bool() & (left_period > 0) & (left_period == right_period)
+    linear_distance = torch.abs(residue_offset)
+    wrapped_distance = left_period - linear_distance
+    wrapped_offset = -wrapped_distance * torch.sign(residue_offset)
+    shortest_offset = torch.where(
+        wrapped_distance < linear_distance, wrapped_offset, residue_offset
+    )
+    return torch.where(cyclic_pair, shortest_offset, residue_offset)
+
 
 class InputFeatureEmbedder(nn.Module):
     """
@@ -165,10 +191,16 @@ class RelativePositionEncoding(nn.Module):
             b_same_entity = (
                 entity_id[..., :, None] == entity_id[..., None, :]
             ).long()  # [..., N_token, N_token]
+            residue_offset = (
+                residue_index[..., :, None] - residue_index[..., None, :]
+            )
+            residue_offset = shortest_cyclic_offset(
+                residue_offset,
+                input_feature_dict.get("cyclic_period"),
+                b_same_chain,
+            )
             d_residue = torch.clip(
-                input=residue_index[..., :, None]
-                - residue_index[..., None, :]
-                + self.r_max,
+                input=residue_offset + self.r_max,
                 min=0,
                 max=2 * self.r_max,
             ) * b_same_chain + (1 - b_same_chain) * (
