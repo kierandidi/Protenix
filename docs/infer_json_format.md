@@ -221,6 +221,9 @@ protenix prep -i examples/examples_with_rna_msa/example_9gmw_2.json -o ./output
 
 The `covalent_bonds` section specifies covalent bonds between a polymer and a ligand, or between two ligands.
 
+An optional integer `bondOrder` records the formal order in the input topology and output mmCIF.
+Use 1 (default), 2 or 3. The model consumes the connectivity between tokens.
+
 Covalent bonds between two polymer residues (regardless of whether they belong to the same or different polymers) are generally not supported.
 Exceptions are made for cyclic peptides, where covalent bonds can be used to define:
 - A head-to-tail amide bond connecting the N- and C-terminal residues, or
