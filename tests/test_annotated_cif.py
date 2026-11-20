@@ -7,7 +7,9 @@ import pytest
 from biotite.sequence import ProteinSequence
 from biotite.structure.io.pdbx import CIFCategory, CIFFile
 
+from protenix.data.constants import ATOM37_ORDER
 from protenix.data.inference.json_maker import annotated_cif_to_input_json, ccd
+from protenix.data.template.template_utils import TemplateHitFeaturizer
 
 
 def test_annotated_cif_resolves_chain_files_and_preserves_disulfide(
@@ -83,6 +85,18 @@ def test_whole_chain_uses_the_archived_structure(tmp_path, monkeypatch):
         direct["queryIndices"]
         == direct["templateIndices"]
         == list(range(len(protein["sequence"])))
+    )
+    reader = TemplateHitFeaturizer(str(mirror), _zero_center_positions=False)
+    (features,) = reader.parse_json_templates([direct], protein["sequence"]).features
+    assert features["template_all_atom_masks"].sum() == sites.row_count
+    ca = sites["label_atom_id"].as_array() == "CA"
+    expected = np.column_stack(
+        [sites[f"Cartn_{axis}"].as_array(float)[ca] for axis in "xyz"]
+    )
+    np.testing.assert_allclose(
+        features["template_all_atom_positions"][:, ATOM37_ORDER["CA"]],
+        expected,
+        atol=0.001,
     )
 
     cif.block["template_hits_by_chain_id"] = CIFCategory({"A": ["hits.hhr"]})
