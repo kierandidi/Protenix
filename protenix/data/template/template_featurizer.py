@@ -761,10 +761,14 @@ class InferenceTemplateFeaturizer:
             template_meta_infos, std_idxs
         )
         for aid, chain in required_chains.items():
-            observed = int(features.atom_mask[:, ca.asym_id_int == aid].sum())
-            if not observed:
+            mask = features.atom_mask[:, ca.asym_id_int == aid]
+            covered = mask.any(axis=(0, 2)).sum()
+            if not covered:
                 raise ValueError(f"No observed template atoms for chain {chain}")
             logger.info(
-                "Chain %s: %d observed template atom positions", chain, observed
+                "Chain %s: %d observed template atom positions (dense slots), covering %d residues",
+                chain,
+                mask.sum(),
+                covered,
             )
         return features.as_protenix_dict()

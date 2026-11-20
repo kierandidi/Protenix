@@ -410,3 +410,11 @@ gzipped alignment for each protein or RNA chain. For protein templates, `_templa
 points to an existing HMMsearch A3M or HHsearch HHR. Relative paths resolve beside the CIF. Set
 `require_template_hits=True` on the runner to require observed template atoms on every chain that
 requests hits.
+
+For self-refolding a complete deposited protein monomer with coordinates annotated on every
+atom, pass a caller-owned scratch directory as `template_dir`. The source PDB accession
+comes from the deposition status or a PDB native-structure reference in the CIF.
+The reader verifies the complete chain against the divided mmCIF archive at `PDB_MIRROR_PATH`
+and writes a direct JSON template containing the archived mmCIF and a full-chain mapping.
+Keep the directory alive through inference and use `require_template_hits=True` to check
+the observed template atoms.
