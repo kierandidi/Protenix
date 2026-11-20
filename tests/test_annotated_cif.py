@@ -1,6 +1,8 @@
 import gzip
+import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 from biotite.sequence import ProteinSequence
 from biotite.structure.io.pdbx import CIFCategory, CIFFile
@@ -45,3 +47,59 @@ def test_annotated_cif_resolves_chain_files_and_preserves_disulfide(
     cif.write(source)
     with pytest.raises(ValueError, match="chain B"):
         annotated_cif_to_input_json(source)
+
+
+def test_whole_chain_uses_the_archived_structure(tmp_path, monkeypatch):
+    monkeypatch.setattr(ccd, "get_one_letter_code", ProteinSequence.convert_letter_3to1)
+    monkeypatch.setattr(ccd, "get_mol_type", lambda _: "protein")
+    reference = Path(__file__).resolve().parents[1] / "scripts/msa/data/mmcif/102m.cif"
+    mirror = tmp_path / "mirror"
+    (mirror / "02").mkdir(parents=True)
+    with gzip.open(mirror / "02/102m.cif.gz", "wb") as out:
+        out.write(reference.read_bytes())
+    monkeypatch.setenv("PDB_MIRROR_PATH", str(mirror))
+    cif = CIFFile.read(reference)
+    sites = cif.block["atom_site"]
+    keep = (sites["label_asym_id"].as_array() == "A") & np.isin(
+        sites["label_alt_id"].as_array(), [".", "A"]
+    )
+    sites = CIFCategory({k: v.as_array()[keep] for k, v in sites.items()})
+    cif.block["atom_site"] = sites
+    if "struct_conn" in cif.block:
+        del cif.block["struct_conn"]
+    order = np.arange(sites.row_count)[::-1]
+    coords = {"idx0": order}
+    for i, axis in enumerate("xyz"):
+        coords[f"val{i}"] = sites[f"Cartn_{axis}"].as_array(float)[order]
+    category = "condition_coordinate_1_atom"
+    cif.block[category] = CIFCategory(coords)
+    query = tmp_path / "input.cif"
+    cif.write(query)
+    job = annotated_cif_to_input_json(query, template_dir=tmp_path)
+    protein = job["sequences"][0]["proteinChain"]
+    (direct,) = json.loads(Path(protein["templatesPath"]).read_text())
+    assert direct["mmcif"] == reference.read_text()
+    assert (
+        direct["queryIndices"]
+        == direct["templateIndices"]
+        == list(range(len(protein["sequence"])))
+    )
+
+    cif.block["template_hits_by_chain_id"] = CIFCategory({"A": ["hits.hhr"]})
+    (tmp_path / "hits.hhr").touch()
+    cif.write(query)
+    with pytest.raises(
+        ValueError, match="Both a deposited self-template and a template file"
+    ):
+        annotated_cif_to_input_json(query, template_dir=tmp_path)
+    del cif.block["template_hits_by_chain_id"]
+
+    coords["val0"][0] += 2
+    cif.block[category] = CIFCategory(coords)
+    cif.write(query)
+    with pytest.raises(ValueError, match="differ from the deposited chain"):
+        annotated_cif_to_input_json(query, template_dir=tmp_path)
+    cif.block[category] = CIFCategory({k: v[1:] for k, v in coords.items()})
+    cif.write(query)
+    with pytest.raises(ValueError, match="every atom"):
+        annotated_cif_to_input_json(query, template_dir=tmp_path)
