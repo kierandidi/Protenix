@@ -400,3 +400,13 @@ The contents of each output file are as follows:
     - `disorder` - Predicted regions of intrinsic disorder within the protein, highlighting residues that may be flexible or unstructured.
     - `ranking_score` - Predicted confidence score for ranking complexes. Higher values indicate greater confidence.
     - `num_recycles`: Number of recycling steps used during inference.
+
+## Fixed assemblies in annotated mmCIF
+
+`protenix.data.inference.json_maker.annotated_cif_to_input_json(path)` reads a materialized assembly
+and returns one inference job. It preserves the supplied chain IDs, waters, modifications, and
+inter-residue covalent bonds. The optional category `_msa_paths_by_chain_id` points to a plain or
+gzipped alignment for each protein or RNA chain. For protein templates, `_template_hits_by_chain_id`
+points to an existing HMMsearch A3M or HHsearch HHR. Relative paths resolve beside the CIF. Set
+`require_template_hits=True` on the runner to require observed template atoms on every chain that
+requests hits.
