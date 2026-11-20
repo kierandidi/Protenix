@@ -303,6 +303,8 @@ def get_default_runner(
     need_atom_confidence: bool = False,
     kalign_binary_path: Optional[str] = None,
     use_tfg_guidance: bool = False,
+    *,
+    require_template_hits: bool = False,
 ) -> InferenceRunner:
     """
     Get a default InferenceRunner with the specified configurations.
@@ -321,6 +323,7 @@ def get_default_runner(
         enable_fusion (bool): Whether to enable diffusion transformer fusion.
         enable_tf32 (bool): Whether to enable TF32.
         use_template (bool): Whether to use templates.
+        require_template_hits (bool): Enable templates and require observed atoms for each supplied hits file.
         use_rna_msa (bool): Whether to use RNA MSA.
         use_seeds_in_json (bool): Whether to use seeds defined in the JSON file.
         kalign_binary_path (Optional[str]): Path to kalign binary.
@@ -369,7 +372,9 @@ def get_default_runner(
     configs.enable_diffusion_shared_vars_cache = enable_cache
     configs.enable_efficient_fusion = enable_fusion
     configs.enable_tf32 = enable_tf32
+    use_template = use_template or require_template_hits
     configs.use_template = use_template
+    configs.require_template_hits = require_template_hits
     configs.use_rna_msa = use_rna_msa
     configs.use_seeds_in_json = use_seeds_in_json
     configs.need_atom_confidence = need_atom_confidence
