@@ -668,6 +668,8 @@ class InferenceTemplateFeaturizer:
         atom_array: AtomArray,
         use_template: bool = True,
         online_template_featurizer: Optional[TemplateHitFeaturizer] = None,
+        *,
+        require_template_hits: bool = False,
     ) -> Dict[str, np.ndarray]:
         """
         Generates template features during inference.
@@ -683,6 +685,7 @@ class InferenceTemplateFeaturizer:
         """
         logger.info("Calling InferenceTemplateFeaturizer.make_template_feature")
         template_meta_infos = {}
+        required_chains = {}
         curr_asym_id = 0
 
         for eid, info in enumerate(bioassembly):
@@ -745,6 +748,8 @@ class InferenceTemplateFeaturizer:
                     "chain_entity_type": ctype,
                     "templates": templates,
                 }
+                if require_template_hits and t_path:
+                    required_chains[aid] = template_meta_infos[aid]["chain_id"]
             curr_asym_id += count
 
         # Coordinate mapping
@@ -752,8 +757,14 @@ class InferenceTemplateFeaturizer:
         std_idxs = map_to_standard(ca.asym_id_int, ca.res_id, template_meta_infos)
 
         # Assemble features
-        return (
-            TemplateFeatureAssemblyLine(max_templates=4)
-            .assemble(template_meta_infos, std_idxs)
-            .as_protenix_dict()
+        features = TemplateFeatureAssemblyLine(max_templates=4).assemble(
+            template_meta_infos, std_idxs
         )
+        for aid, chain in required_chains.items():
+            observed = int(features.atom_mask[:, ca.asym_id_int == aid].sum())
+            if not observed:
+                raise ValueError(f"No observed template atoms for chain {chain}")
+            logger.info(
+                "Chain %s: %d observed template atom positions", chain, observed
+            )
+        return features.as_protenix_dict()
