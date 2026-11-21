@@ -25,12 +25,12 @@ from pathlib import Path
 
 import numpy as np
 from biotite.structure import AtomArray, get_chain_starts, get_residue_starts
+from biotite.structure.io.pdbx import CIFBlock, CIFCategory, CIFFile
 
 from protenix.data.constants import STD_RESIDUES
 from protenix.data.core import ccd
 from protenix.data.core.filter import Filter
 from protenix.data.core.parser import AddAtomArrayAnnot, MMCIFParser
-from protenix.data.template.template_parser import TemplateParser
 from protenix.data.utils import (
     get_lig_lig_bonds,
     get_ligand_polymer_bond_mask,
@@ -367,88 +367,123 @@ def _source_accession(block):
     return entry
 
 
-def _archived_protein_atoms(cif, entry, entity):
-    reference = TemplateParser.parse(file_id=entry, mmcif_string=cif).mmcif_object
-    (chain_id,) = entity["id"]
-    sequence = entity["sequence"]
-    if reference is None or reference.chain_to_seqres != {chain_id: sequence}:
-        raise ValueError(
-            f"The input must match the complete deposited protein chain in {entry}"
-        )
-    # The direct reader numbers the observed residues of the first chain in file order.
-    chain = next(reference.structure.get_chains())
-    residues = list(chain)
-    if chain.id != chain_id or len(residues) < len(sequence):
-        raise ValueError(f"Unresolved or ambiguous deposited chain in {entry}")
+def _archive_rows(sites, atoms):
+    """Match each input atom to a unique model-1 atom in the deposited coordinate frame."""
+    xyz = np.column_stack([sites[f"Cartn_{axis}"].as_array(float) for axis in "xyz"])
 
-    coordinates = {}
-    for pos, residue in enumerate(residues[: len(sequence)], 1):
-        site = reference.seqres_to_structure[chain_id][pos - 1]
-        if (
-            site.is_missing
-            or site.position is None
-            or residue.id
-            != (
-                site.hetflag,
-                site.position.residue_number,
-                site.position.insertion_code,
-            )
+    def keys(residues, names, elements, coordinates):
+        for res, name, elem, point in zip(
+            residues, names, elements, np.rint(coordinates * 1000).astype(int)
         ):
-            raise ValueError(f"Unresolved or ambiguous residue {pos} in {entry}")
-        for atom in residue:
-            if atom.element not in {"H", "D"}:
-                coordinates[(pos, site.name, atom.name)] = atom.coord
-    return coordinates
+            # Both readers canonicalize the symmetry-equivalent terminal nitrogens of arginine.
+            if res == "ARG" and name in {"NH1", "NH2"}:
+                name = "NH"
+            yield (res, name, elem, *point)
+
+    index = {}
+    models = sites["pdbx_PDB_model_num"].as_array(int)
+    for i, key in enumerate(
+        keys(
+            sites["label_comp_id"].as_array(),
+            sites["label_atom_id"].as_array(),
+            sites["type_symbol"].as_array(),
+            xyz,
+        )
+    ):
+        if models[i] == 1:
+            index[key] = i if key not in index else -1
+    rows = np.array(
+        [
+            index.get(key, -1)
+            for key in keys(atoms.res_name, atoms.atom_name, atoms.element, atoms.coord)
+        ]
+    )
+    if (rows < 0).any() or len(np.unique(rows)) != len(atoms):
+        raise ValueError(
+            "Input atom identities or coordinates differ from the deposited structure or are ambiguous"
+        )
+    return rows
 
 
-def _deposited_self_template(block, coords, atoms, positions, entity, directory):
-    """Compare the complete fixed chain to the archive before using the archived coordinates."""
+def _deposited_templates(block, coords, atoms, positions, chains, directory):
+    """Use only observed residues from the named archive, verified against the entire fixed input."""
+    indices = coords["idx0"].as_array(int)
+    values = np.column_stack([coords[f"val{i}"].as_array(float) for i in range(3)])
+    active = np.isfinite(values).all(axis=1)
+    if not np.all(active | np.isnan(values).all(axis=1)):
+        raise ValueError("Partially defined coordinate annotation")
+    if not active.any():
+        return
+    if (
+        block["atom_site"].row_count != len(atoms)
+        or (indices < 0).any()
+        or (indices >= len(atoms)).any()
+        or len(np.unique(indices)) != len(indices)
+    ):
+        raise ValueError("Ambiguous atom indices in the coordinate annotation")
+    marked = np.zeros(len(atoms), dtype=bool)
+    marked[indices[active]] = True
+    if not np.allclose(
+        values[active], atoms.coord[indices[active]], atol=0.0011, rtol=0
+    ):
+        raise ValueError("Annotated coordinates differ from the deposited chain")
+
     entry = _source_accession(block)
     root = os.getenv("PDB_MIRROR_PATH")
     if not root or directory is None:
         raise ValueError(
             "A deposited self-template needs PDB_MIRROR_PATH and a template directory"
         )
-    if "templatesPath" in entity:
-        raise ValueError(
-            "Both a deposited self-template and a template file were requested for the same chain"
-        )
-
-    indices = coords["idx0"].as_array(int)
-    values = np.column_stack([coords[f"val{i}"].as_array(float) for i in range(3)])
-    if (
-        not np.array_equal(np.sort(indices), np.arange(len(atoms)))
-        or not np.isfinite(values).all()
-        or block["atom_site"].row_count != len(atoms)
-    ):
-        raise ValueError(
-            "A deposited self-template requires coordinates for every atom of one protein chain"
-        )
-
     with gzip.open(Path(root) / entry[1:3] / f"{entry}.cif.gz", "rt") as source:
-        cif = source.read()
-    archived = _archived_protein_atoms(cif, entry, entity)
-    heavy = ~np.isin(atoms.element[indices], ["H", "D"])
-    rows = indices[heavy]
-    keys = list(zip(positions[rows], atoms.res_name[rows], atoms.atom_name[rows]))
-    if len(keys) != len(archived) or set(keys) != archived.keys():
-        raise ValueError(
-            f"Heavy-atom identities differ from the deposited chain in {entry}"
+        sites = CIFFile.read(source).block["atom_site"]
+    archive_rows = _archive_rows(sites, atoms)
+    source_chains = sites["label_asym_id"].as_array()
+    source_positions = sites["label_seq_id"].as_array()
+    for chain_id, (_, kind, entity) in chains.items():
+        chain = atoms.chain_id == chain_id
+        chain_rows = archive_rows[chain]
+        if len(set(source_chains[chain_rows])) != 1:
+            raise ValueError(f"Input chain {chain_id} mixes deposited chains")
+        if kind != "ligand":
+            seq_ids = source_positions[chain_rows].astype(int)
+            step = np.diff(seq_ids)
+            if np.any(step < 0) or not np.array_equal(
+                step != 0, np.diff(positions[chain]) != 0
+            ):
+                raise ValueError(
+                    f"Input chain {chain_id} does not follow the deposited residue order"
+                )
+        selected = chain & marked
+        if not selected.any():
+            continue
+        if kind != "proteinChain":
+            raise ValueError("Deposited coordinate templates require protein residues")
+        if "templatesPath" in entity:
+            raise ValueError(
+                "Both a deposited self-template and a template file were requested for the same chain"
+            )
+        residues = np.unique(positions[selected])
+        if not np.array_equal(selected, chain & np.isin(positions, residues)):
+            raise ValueError(
+                "A deposited template needs coordinates for every atom of each selected residue"
+            )
+        rows = archive_rows[selected]
+        # The direct reader indexes observed residues in file order. A chain-only CIF keeps
+        # cropped positions aligned and leaves every unselected archive atom out of its masks.
+        archived = CIFCategory(
+            {key: column.as_array()[rows] for key, column in sites.items()}
         )
-    if not np.allclose(values[heavy], [archived[k] for k in keys], atol=0.0011, rtol=0):
-        raise ValueError(
-            f"Annotated coordinates differ from the deposited chain in {entry}"
-        )
-
-    full_chain = list(range(len(entity["sequence"])))
-    with tempfile.NamedTemporaryFile(
-        mode="w", dir=directory, suffix=".json", delete=False
-    ) as out:
-        json.dump(
-            [{"mmcif": cif, "queryIndices": full_chain, "templateIndices": full_chain}],
-            out,
-        )
-        return str(Path(out.name).resolve())
+        cif = CIFFile({entry: CIFBlock({"atom_site": archived})})
+        template = {
+            "mmcif": cif.serialize(),
+            "queryIndices": (residues - 1).tolist(),
+            "templateIndices": list(range(len(residues))),
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=directory, suffix=".json", delete=False
+        ) as out:
+            json.dump([template], out)
+            entity["templatesPath"] = str(Path(out.name).resolve())
 
 
 def annotated_cif_to_input_json(
@@ -504,17 +539,8 @@ def annotated_cif_to_input_json(
         sequences.append({kind: entity})
 
     _read_chain_references(block, path.parent, chains)
-    if coords is not None and any(
-        np.isfinite(coords[f"val{i}"].as_array(float)).any() for i in range(3)
-    ):
-        if len(sequences) != 1 or "proteinChain" not in sequences[0]:
-            raise ValueError(
-                "A deposited self-template requires a single fixed protein chain"
-            )
-        entity = sequences[0]["proteinChain"]
-        entity["templatesPath"] = _deposited_self_template(
-            block, coords, atoms, positions, entity, template_dir
-        )
+    if coords is not None:
+        _deposited_templates(block, coords, atoms, positions, chains, template_dir)
     return {
         "name": sample_name or path.stem,
         "sequences": sequences,

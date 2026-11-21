@@ -80,7 +80,11 @@ def test_whole_chain_uses_the_archived_structure(tmp_path, monkeypatch):
     job = annotated_cif_to_input_json(query, template_dir=tmp_path)
     protein = job["sequences"][0]["proteinChain"]
     (direct,) = json.loads(Path(protein["templatesPath"]).read_text())
-    assert direct["mmcif"] == reference.read_text()
+    archive_sites = CIFFile.deserialize(direct["mmcif"]).block["atom_site"]
+    for key in sites:
+        np.testing.assert_array_equal(
+            archive_sites[key].as_array(), sites[key].as_array()
+        )
     assert (
         direct["queryIndices"]
         == direct["templateIndices"]
@@ -99,6 +103,28 @@ def test_whole_chain_uses_the_archived_structure(tmp_path, monkeypatch):
         atol=0.001,
     )
 
+    # Folds of gapped, fixed structures must not condition unselected query residues.
+    selected = [1, 3, 5]
+    residue_ids = sites["label_seq_id"].as_array(int)[order] - 1
+    keep = np.isin(residue_ids, selected)
+    cif.block[category] = CIFCategory({k: v[keep] for k, v in coords.items()})
+    cif.write(query)
+    cropped = annotated_cif_to_input_json(query, template_dir=tmp_path)["sequences"][0][
+        "proteinChain"
+    ]
+    (direct,) = json.loads(Path(cropped["templatesPath"]).read_text())
+    assert direct["queryIndices"] == selected
+    (features,) = reader.parse_json_templates([direct], cropped["sequence"]).features
+    ca = ATOM37_ORDER["CA"]
+    np.testing.assert_array_equal(
+        np.flatnonzero(features["template_all_atom_masks"][:, ca]), selected
+    )
+    np.testing.assert_allclose(
+        features["template_all_atom_positions"][selected, ca],
+        expected[selected],
+        atol=0.001,
+    )
+    cif.block[category] = CIFCategory(coords)
     cif.block["template_hits_by_chain_id"] = CIFCategory({"A": ["hits.hhr"]})
     (tmp_path / "hits.hhr").touch()
     cif.write(query)
