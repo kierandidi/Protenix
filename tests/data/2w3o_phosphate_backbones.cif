@@ -1,0 +1,33 @@
+data_2w3o
+# Model 1, chain C, from the deposited 2W3O atom_site table.
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.pdbx_formal_charge
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.pdbx_PDB_model_num
+HETATM 1530 N  N   . SEP C 2 4   ? 26.065 -6.181  -14.589 1.00 28.44 ? 518  SEP C N   1
+HETATM 1531 C  CA  A SEP C 2 4   ? 27.206 -5.655  -15.322 0.60 28.05 ? 518  SEP C CA  1
+HETATM 1533 C  CB  A SEP C 2 4   ? 26.762 -5.163  -16.723 0.60 28.70 ? 518  SEP C CB  1
+HETATM 1537 C  C   . SEP C 2 4   ? 27.910 -4.528  -14.530 1.00 27.15 ? 518  SEP C C   1
+HETATM 1547 N  N   . TPO C 2 5   ? 29.238 -4.479  -14.636 1.00 27.07 ? 519  TPO C N   1
+HETATM 1548 C  CA  . TPO C 2 5   ? 30.009 -3.409  -13.999 1.00 26.91 ? 519  TPO C CA  1
+HETATM 1549 C  CB  . TPO C 2 5   ? 31.498 -3.739  -14.157 1.00 26.89 ? 519  TPO C CB  1
+HETATM 1556 C  C   . TPO C 2 5   ? 29.686 -2.076  -14.639 1.00 28.39 ? 519  TPO C C   1
+#

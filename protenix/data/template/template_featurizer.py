@@ -761,8 +761,9 @@ class InferenceTemplateFeaturizer:
             template_meta_infos, std_idxs
         )
         for aid, chain in required_chains.items():
-            mask = features.atom_mask[:, ca.asym_id_int == aid]
-            covered = mask.any(axis=(0, 2)).sum()
+            chain_tokens = ca.asym_id_int == aid
+            mask = features.atom_mask[:, chain_tokens]
+            covered = np.unique(ca.res_id[chain_tokens][mask.any(axis=(0, 2))]).size
             if not covered:
                 raise ValueError(f"No observed template atoms for chain {chain}")
             logger.info(
