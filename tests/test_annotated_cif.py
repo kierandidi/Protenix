@@ -9,7 +9,7 @@ from biotite.structure.io.pdbx import CIFCategory, CIFFile
 
 from protenix.data.constants import ATOM37_ORDER
 from protenix.data.inference.json_maker import annotated_cif_to_input_json, ccd
-from protenix.data.template.template_utils import TemplateHitFeaturizer
+from protenix.data.template.template_utils import TemplateFeatures, TemplateHitFeaturizer
 
 
 def test_annotated_cif_resolves_chain_files_and_preserves_disulfide(
@@ -143,3 +143,24 @@ def test_whole_chain_uses_the_archived_structure(tmp_path, monkeypatch):
     cif.write(query)
     with pytest.raises(ValueError, match="every atom"):
         annotated_cif_to_input_json(query, template_dir=tmp_path)
+
+
+def test_phosphorylated_template_backbones_keep_the_deposited_ca(tmp_path):
+    source = Path(__file__).parent / "data/2w3o_phosphate_backbones.cif"
+    direct = {
+        "mmcif": source.read_text(),
+        "queryIndices": [0, 1],
+        "templateIndices": [0, 1],
+    }
+    reader = TemplateHitFeaturizer(str(tmp_path), _zero_center_positions=False)
+    hits = reader.parse_json_templates([direct], "ST").features
+    packed = TemplateFeatures.package_template_features(hit_features=hits)
+    dense = TemplateFeatures.fix_template_features(packed, num_res=2)
+    sites = CIFFile.read(source).block["atom_site"]
+    ca = sites["label_atom_id"].as_array() == "CA"
+    expected = np.column_stack(
+        [sites[f"Cartn_{axis}"].as_array(float)[ca] for axis in "xyz"]
+    )
+    np.testing.assert_allclose(
+        dense["template_atom_positions"][0, :, 1], expected, atol=0.001
+    )
