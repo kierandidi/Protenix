@@ -37,6 +37,9 @@ from protenix.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# The dense template features use the parent amino acid's backbone and side-chain atom indices.
+_DIRECT_PROTEIN_LETTERS = {**PDBData.protein_letters_3to1, "SEP": "S", "TPO": "T", "PTR": "Y"}
+
 # Type aliases for clarity.
 MmCIFDict = Mapping[str, Sequence[str]]
 PdbHeader = Mapping[str, Any]
@@ -398,7 +401,7 @@ class TemplateParser:
             
             for idx, res in enumerate(residues):
                 resname = res.get_resname()
-                template_seq_list.append(PDBData.protein_letters_3to1.get(resname, "X"))
+                template_seq_list.append(_DIRECT_PROTEIN_LETTERS.get(resname, "X"))
                 
                 hetflag, resseq, icode = res.get_id()
                 pos = ResiduePosition(

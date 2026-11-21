@@ -9,7 +9,7 @@ from biotite.structure.io.pdbx import CIFCategory, CIFFile
 
 from protenix.data.constants import ATOM37_ORDER
 from protenix.data.inference.json_maker import annotated_cif_to_input_json, ccd
-from protenix.data.template.template_utils import TemplateHitFeaturizer
+from protenix.data.template.template_utils import TemplateFeatures, TemplateHitFeaturizer
 
 
 def test_annotated_cif_resolves_chain_files_and_preserves_disulfide(
@@ -80,7 +80,11 @@ def test_whole_chain_uses_the_archived_structure(tmp_path, monkeypatch):
     job = annotated_cif_to_input_json(query, template_dir=tmp_path)
     protein = job["sequences"][0]["proteinChain"]
     (direct,) = json.loads(Path(protein["templatesPath"]).read_text())
-    assert direct["mmcif"] == reference.read_text()
+    archive_sites = CIFFile.deserialize(direct["mmcif"]).block["atom_site"]
+    for key in sites:
+        np.testing.assert_array_equal(
+            archive_sites[key].as_array(), sites[key].as_array()
+        )
     assert (
         direct["queryIndices"]
         == direct["templateIndices"]
@@ -99,6 +103,28 @@ def test_whole_chain_uses_the_archived_structure(tmp_path, monkeypatch):
         atol=0.001,
     )
 
+    # Folds of gapped, fixed structures must not condition unselected query residues.
+    selected = [1, 3, 5]
+    residue_ids = sites["label_seq_id"].as_array(int)[order] - 1
+    keep = np.isin(residue_ids, selected)
+    cif.block[category] = CIFCategory({k: v[keep] for k, v in coords.items()})
+    cif.write(query)
+    cropped = annotated_cif_to_input_json(query, template_dir=tmp_path)["sequences"][0][
+        "proteinChain"
+    ]
+    (direct,) = json.loads(Path(cropped["templatesPath"]).read_text())
+    assert direct["queryIndices"] == selected
+    (features,) = reader.parse_json_templates([direct], cropped["sequence"]).features
+    ca = ATOM37_ORDER["CA"]
+    np.testing.assert_array_equal(
+        np.flatnonzero(features["template_all_atom_masks"][:, ca]), selected
+    )
+    np.testing.assert_allclose(
+        features["template_all_atom_positions"][selected, ca],
+        expected[selected],
+        atol=0.001,
+    )
+    cif.block[category] = CIFCategory(coords)
     cif.block["template_hits_by_chain_id"] = CIFCategory({"A": ["hits.hhr"]})
     (tmp_path / "hits.hhr").touch()
     cif.write(query)
@@ -117,3 +143,24 @@ def test_whole_chain_uses_the_archived_structure(tmp_path, monkeypatch):
     cif.write(query)
     with pytest.raises(ValueError, match="every atom"):
         annotated_cif_to_input_json(query, template_dir=tmp_path)
+
+
+def test_phosphorylated_template_backbones_keep_the_deposited_ca(tmp_path):
+    source = Path(__file__).parent / "data/2w3o_phosphate_backbones.cif"
+    direct = {
+        "mmcif": source.read_text(),
+        "queryIndices": [0, 1],
+        "templateIndices": [0, 1],
+    }
+    reader = TemplateHitFeaturizer(str(tmp_path), _zero_center_positions=False)
+    hits = reader.parse_json_templates([direct], "ST").features
+    packed = TemplateFeatures.package_template_features(hit_features=hits)
+    dense = TemplateFeatures.fix_template_features(packed, num_res=2)
+    sites = CIFFile.read(source).block["atom_site"]
+    ca = sites["label_atom_id"].as_array() == "CA"
+    expected = np.column_stack(
+        [sites[f"Cartn_{axis}"].as_array(float)[ca] for axis in "xyz"]
+    )
+    np.testing.assert_allclose(
+        dense["template_atom_positions"][0, :, 1], expected, atol=0.001
+    )
